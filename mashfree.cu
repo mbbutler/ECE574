@@ -1,3 +1,6 @@
+// Forrest Flagg
+// Brady Butler
+
 #include <cmath>
 #include <string.h>
 #include <cstring>
