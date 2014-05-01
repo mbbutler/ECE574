@@ -10,9 +10,9 @@
 
 #define GRAV	-9.8
 #define K_CON	1
-#define RHO		1
+#define RHO		1000
 #define MU		1
-#define NPPB	64		// number of particles per block
+#define NPPB	1024		// number of particles per block
 
 using namespace std;
 
@@ -39,6 +39,7 @@ struct Force_s {
 void init_particles(Particle* part, int n, dim3 bn);
 __global__ void run(Particle *data, p_type dt, p_type h);
 __device__ void move(Particle *local, p_type dt);
+__device__ void boundary_conditions(Particle *local, float3 max, float3 min);
 __device__ void mem_s2g(Particle *data, Particle *local);
 __device__ Particle *mem_g2s(Particle *data);
 __device__ Particle *calc_all_forces(Particle *data, Particle *local, p_type h);
@@ -48,7 +49,6 @@ __device__ Force calc_l_visc(Particle *loc, Particle *bloc, p_type h);
 __device__ p_type calc_l_den(Particle *loc, Particle *bloc, p_type h);
 __device__ void calc_den(Particle *data, Particle *local, p_type h);
 __device__ p_type calc_l_pf(Particle *loc, Particle *bloc, p_type h);
-//void set_positions(float *pos, int N);
 
 using namespace std;
 
@@ -77,7 +77,7 @@ int main(int argc, char *argv[]) {
 	dim3 threadsPerBlock(NPPB);
 	dim3 numBlocks(3, 3, 3);
 
-	init_particles(part, N, numBlocks);
+	init_particles(part, NPPB, numBlocks);
 
 	// Setup device array for pos and vel info
 	Particle *d_part;
@@ -100,7 +100,11 @@ int main(int argc, char *argv[]) {
 	}
 	cout << "Done copying from host to device" << endl;
 
+	p_type h, dt;
+	dt = 0.01;
+	h = 0.1;
 //	<<<numBlocks, threadsPerBlock, 2*NPPB*sizeof(Particle)>>>
+	run<<<numBlocks, threadsPerBlock>>>(d_part, dt, h);
 
 	// Copy memory from  device to host
 	cout << "Copying from device to host" << endl;
@@ -146,6 +150,17 @@ __device__ void move(Particle *local, p_type dt) {
 	me->vx += (me->fx + me->ofx)/2*dt;
 	me->vy += (me->fy + me->ofy)/2*dt;
 	me->vz += (me->fz + me->ofz)/2*dt;
+}
+
+__device__ void boundary_conditions(Particle *local, float3 max, float3 min) {
+	Particle *me = &local[threadIdx.x];
+	dim3 val;
+	val.x = me->x > max.x || me->x < min.x; 
+	val.y = me->x > max.y || me->y < min.y; 
+	val.z = me->x > max.z || me->z < min.z; 
+	me->vx += -1.9 * me->vx * val.x;
+	me->vy += -1.9 * me->vy * val.y;
+	me->vz += -1.9 * me->vz * val.z;
 }
 
 __device__ void mem_s2g(Particle *data, Particle *local) {
@@ -223,7 +238,6 @@ __device__ Force calc_l_visc(Particle *loc, Particle *bloc, p_type h) {
 	for(int i = 0; i < blockDim.x; ++i) {
 		you = &bloc[i];
 		p_type r = sqrt((me->x - you->x)*(me->x - you->x) + (me->y - you->y)*(me->y - you->y) + (me->z - you->z)*(me->z - you->z));
-//		con = ((r-h)>>(sizeof(p_type)*8 -1)) * you->mass/you->den*45/(M_PI*h6);
 		con = (r>=0 || r<=h) * you->mass/you->den*45/(M_PI*h6);
 		force.x += (you->vx-me->vx) * con;
 		force.y += (you->vy-me->vy) * con;
@@ -235,14 +249,12 @@ __device__ Force calc_l_visc(Particle *loc, Particle *bloc, p_type h) {
 __device__ p_type calc_l_pf(Particle *loc, Particle *bloc, p_type h) {
 	int id = threadIdx.x;
 	p_type f = 0;
-//	int del = 0;
 	Particle me = loc[id];
 	Particle you;
 	p_type h6 = pow(h,6);
 	for(int i = 0; i < blockDim.x; ++i) {
 		you = bloc[i];
 		p_type r = sqrt((me.x - you.x)*(me.x - you.x) + (me.y - you.y)*(me.y - you.y) + (me.z - you.z)*(me.z - you.z));
-//		f += ((r-h)>>(sizeof(p_type)*8 -1)) * me.mass * K_CON * (2*RHO + me.den + you.den) * 15/(M_PI*h6)*pow(h-r, 3);
 		f += (r>=0 || r<=h) * me.mass * K_CON * (2*RHO + me.den + you.den) * 15/(M_PI*h6)*pow(h-r, 3);
 	}
 	return f;
@@ -283,21 +295,8 @@ __device__ p_type calc_l_den(Particle *loc, Particle *bloc, p_type h) {
 	int id = threadIdx.x;
 	for(int i = 0; i < blockDim.x; ++i) {
 		p_type rsq = (loc[id].x - bloc[i].x)*(loc[id].x - bloc[i].x) + (loc[id].y - bloc[i].y)*(loc[id].y - bloc[i].y) + (loc[id].z - bloc[i].z)*(loc[id].z - bloc[i].z);
-//		den += ((rsq-h*h)>>(sizeof(p_type)*8 -1)) * loc[id].mass * 315*(h*h-rsq)/(64*M_PI*pow(h,9));
 		den += (rsq >= 0 || rsq <= h*h) * loc[id].mass * 315*(h*h-rsq)/(64*M_PI*pow(h,9));
 	}
 	return den;
 }
 
-/*
-void set_positions(float *pos, int N) {
-	srand(time(NULL));
-	for (int i = 0; i < N; ++i) {
-		for (int j = 0; j < N; ++j) {
-			pos[i*N + j] = j;
-			pos[2*(i*N + j)] = i;
-			pos[3*(i*N + j)] = (rand() % 50) / 10.0;
-		}
-	}
-}
-*/
