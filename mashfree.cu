@@ -50,18 +50,29 @@ __device__ void calc_den(Particle *data, Particle *local, p_type h);
 __device__ p_type calc_l_pf(Particle *loc, Particle *bloc, p_type h);
 //void set_positions(float *pos, int N);
 
+using namespace std;
+
 int main(int argc, char *argv[]) {
+
+	if (argc != 2) {
+		cout << "Error:  Incorrect arguments." << endl;
+		cout << "Usage:  " << argv[0] << " numParticles " << endl;
+		exit(-1);
+	}
+
 	// Get number of particles from input
 	string val_string = argv[1];
 	int N = atoi(val_string.c_str());
 	// Setup host array for position and velocity info
 	Particle *part;
 	size_t size = N*sizeof(Particle);
+	cout << "Allocating for particles on host" << endl;
 	part = (Particle*)malloc(size);
 	if (!part) {
 			cout << "Malloc failed" << endl;
 			exit(0);
 	}
+	cout << "Done allocating for particles on host" << endl;
 
 	dim3 threadsPerBlock(NPPB);
 	dim3 numBlocks(3, 3, 3);
@@ -72,26 +83,33 @@ int main(int argc, char *argv[]) {
 	Particle *d_part;
 
 	// Allocate memory on device
+	cout << "Allocating for particles on device" << endl;
 	cudaError_t err  = cudaMalloc(&d_part, size);
 	if (err != cudaSuccess) {
 		cout << "cudaMalloc failed" << endl;
 		exit(0);
 	}
+	cout << "Done allocating for particles on device" << endl;
+
 	// Copy memory to device
+	cout << "Copying from host to device" << endl;
 	err = cudaMemcpy(d_part, part, size, cudaMemcpyHostToDevice);
 	if (err != cudaSuccess) {
 		cout << "cudaMemcpy failed with error: " << err << endl;
 		exit(0);
 	}
+	cout << "Done copying from host to device" << endl;
 
 //	<<<numBlocks, threadsPerBlock, 2*NPPB*sizeof(Particle)>>>
 
 	// Copy memory from  device to host
+	cout << "Copying from device to host" << endl;
 	err = cudaMemcpy(part, d_part, size, cudaMemcpyDeviceToHost);
 	if (err != cudaSuccess) { 
 		cout << "cudaMemcpy failed with error: " << err << endl;
 		exit(0);
 	}
+	cout << "Done copying from device to host" << endl;
 }
 
 void init_particles(Particle* part, int n, dim3 bn) {
@@ -110,16 +128,6 @@ void init_particles(Particle* part, int n, dim3 bn) {
 			}
 		}
 	}
-	
-struct Particle_s {
-	p_type x,y,z;
-	p_type vx, vy, vz;
-	p_type fx, fy, fz;
-	p_type ofx, ofy, ofz;
-	p_type den;
-	p_type mass;
-};
-
 }
 
 __global__ void run(Particle *data, p_type dt, p_type h) {
@@ -205,7 +213,6 @@ __device__ Particle *calc_all_forces(Particle *data, Particle *local, p_type h) 
 
 
 __device__ Force calc_l_visc(Particle *loc, Particle *bloc, p_type h) {
-//	int del = 0;
 	Force force;
 	force.x = force.y = force.z = 0;
 	int id = threadIdx.x;
@@ -216,10 +223,8 @@ __device__ Force calc_l_visc(Particle *loc, Particle *bloc, p_type h) {
 	for(int i = 0; i < blockDim.x; ++i) {
 		you = &bloc[i];
 		p_type r = sqrt((me->x - you->x)*(me->x - you->x) + (me->y - you->y)*(me->y - you->y) + (me->z - you->z)*(me->z - you->z));
-		if (r >= 0 || r <= h) {
-//			con = ((r-h)>>(sizeof(p_type)*8 -1)) * you->mass/you->den*45/(M_PI*h6);
-			con = you->mass/you->den*45/(M_PI*h6);
-		}
+//		con = ((r-h)>>(sizeof(p_type)*8 -1)) * you->mass/you->den*45/(M_PI*h6);
+		con = (r>=0 || r<=h) * you->mass/you->den*45/(M_PI*h6);
 		force.x += (you->vx-me->vx) * con;
 		force.y += (you->vy-me->vy) * con;
 		force.z += (you->vz-me->vz) * con;
@@ -237,10 +242,8 @@ __device__ p_type calc_l_pf(Particle *loc, Particle *bloc, p_type h) {
 	for(int i = 0; i < blockDim.x; ++i) {
 		you = bloc[i];
 		p_type r = sqrt((me.x - you.x)*(me.x - you.x) + (me.y - you.y)*(me.y - you.y) + (me.z - you.z)*(me.z - you.z));
-		if (r >= 0 || r <= h) {
-//			f += ((r-h)>>(sizeof(p_type)*8 -1)) * me.mass * K_CON * (2*RHO + me.den + you.den) * 15/(M_PI*h6)*pow(h-r, 3);
-			f += me.mass * K_CON * (2*RHO + me.den + you.den) * 15/(M_PI*h6)*pow(h-r, 3);
-		}
+//		f += ((r-h)>>(sizeof(p_type)*8 -1)) * me.mass * K_CON * (2*RHO + me.den + you.den) * 15/(M_PI*h6)*pow(h-r, 3);
+		f += (r>=0 || r<=h) * me.mass * K_CON * (2*RHO + me.den + you.den) * 15/(M_PI*h6)*pow(h-r, 3);
 	}
 	return f;
 }
@@ -278,13 +281,10 @@ __device__ void calc_den(Particle *data, Particle *local, p_type h) {
 __device__ p_type calc_l_den(Particle *loc, Particle *bloc, p_type h) {
 	p_type den = 0;
 	int id = threadIdx.x;
-//	int del = 0;
 	for(int i = 0; i < blockDim.x; ++i) {
 		p_type rsq = (loc[id].x - bloc[i].x)*(loc[id].x - bloc[i].x) + (loc[id].y - bloc[i].y)*(loc[id].y - bloc[i].y) + (loc[id].z - bloc[i].z)*(loc[id].z - bloc[i].z);
-		if (rsq >= 0 || rsq <= h*h) {
-//			den += ((rsq-h*h)>>(sizeof(p_type)*8 -1)) * loc[id].mass * 315*(h*h-rsq)/(64*M_PI*pow(h,9));
-			den +=  loc[id].mass * 315*(h*h-rsq)/(64*M_PI*pow(h,9));
-		}
+//		den += ((rsq-h*h)>>(sizeof(p_type)*8 -1)) * loc[id].mass * 315*(h*h-rsq)/(64*M_PI*pow(h,9));
+		den += (rsq >= 0 || rsq <= h*h) * loc[id].mass * 315*(h*h-rsq)/(64*M_PI*pow(h,9));
 	}
 	return den;
 }
