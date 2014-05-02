@@ -120,14 +120,19 @@ void init_particles(Particle* part, int n, dim3 bn) {
 	for (int z = 0; z < bn.z; ++z) {
 		for (int y = 0; y < bn.y; ++y) {
 			for (int x = 0; x < bn.x; ++x) {
-				int id = bn.z*bn.y*bn.x*z + bn.y*bn.x*y + bn.x*x;
-				for (int i = 0; i < n; ++i) {
-					part[i].x = id + i;
-					part[i].y = id + i;
-					part[i].z = id + i;
-					part[i].vx = 0; 
-					part[i].vy = 0;
-					part[i].vz = 0;
+				int id = bn.y*bn.x*z + bn.x*y + x;
+				for (int i = 0; i < NPPB; ++i) {
+					int index = id*n + i;
+					if (index >= n) {
+						return;
+					}
+//					cout << "index = " << index << endl;
+					part[index].x = index;
+					part[index].y = index;
+					part[index].z = index;
+					part[index].vx = 0; 
+					part[index].vy = 0;
+					part[index].vz = 0;
 				}
 			}
 		}
